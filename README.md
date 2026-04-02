@@ -36,10 +36,11 @@ Optional:
 - `X_TOKEN_STORE_PATH`
 - `X_IMAGE_MODE` (`auto`, `kitty`, or `off`)
 
-### 3) Start the app
+### 3) Link and start the app
 
 ```bash
-bun run start
+bun link
+tuitter
 ```
 
 On first launch, the app opens your browser for OAuth authorization and then stores your token locally (default: `~/.tuitter/oauth-token.json`).
@@ -59,6 +60,6 @@ Use these steps so anyone can run this project with their own X developer app:
    - `X_CLIENT_SECRET=...`
 7. (Optional) Configure scopes. The app defaults to:
    - `tweet.read users.read tweet.write like.write like.read bookmark.write bookmark.read offline.access`
-8. Save your `.env` and run `bun run start` again.
+8. Save your `.env` and run `tuitter` again.
 
 If OAuth fails, verify that the callback URL in `console.x.com` exactly matches `X_REDIRECT_URI` in your `.env`.
