@@ -19,6 +19,8 @@ export class ProfileView implements TuitterView {
   private loading = false;
   private loadingPosts = false;
   private nextToken: string | undefined;
+  private savedScrollTop = 0;
+  private shouldScrollSelectionIntoView = false;
 
   public constructor(ctx: ViewContext, username: string) {
     this.ctx = ctx;
@@ -36,6 +38,7 @@ export class ProfileView implements TuitterView {
   }
 
   public render(): ViewDescriptor {
+    this.captureScrollTop();
     if (!this.user) {
       return {
         title: `Profile @${this.username}`,
@@ -160,7 +163,16 @@ export class ProfileView implements TuitterView {
     return false;
   }
 
+  public onAfterRenderSync(): void {
+    this.restoreScrollTop();
+  }
+
   public async onDidRender(): Promise<void> {
+    if (this.shouldScrollSelectionIntoView) {
+      this.shouldScrollSelectionIntoView = false;
+      this.scrollSelectedIntoView();
+    }
+
     if (!this.user || this.ctx.inlineImageManager.isDisabled()) {
       await this.ctx.inlineImageManager.reconcileMany([]);
       return;
@@ -199,10 +211,9 @@ export class ProfileView implements TuitterView {
 
     const next = Math.max(0, Math.min(this.posts.length - 1, this.selectedIndex + delta));
     this.selectedIndex = next;
-    this.scrollSelectedIntoView();
+    this.shouldScrollSelectionIntoView = true;
     if (this.nextToken && this.selectedIndex >= this.posts.length - 3) {
       await this.loadMorePosts();
-      this.scrollSelectedIntoView();
     }
   }
 
@@ -224,12 +235,7 @@ export class ProfileView implements TuitterView {
 
   private scrollSelectedIntoViewWithRetry(selectedCardId: string, attempt: number): void {
     setTimeout(() => {
-      const scrollBox = this.ctx.renderer.root.findDescendantById(this.scrollId) as
-        | {
-            scrollChildIntoView?: (childId: string) => void;
-            scrollTop?: number;
-          }
-        | undefined;
+      const scrollBox = this.getScrollBox();
 
       if (!scrollBox?.scrollChildIntoView) {
         if (attempt < 4) {
@@ -241,11 +247,46 @@ export class ProfileView implements TuitterView {
       const before = scrollBox.scrollTop;
       scrollBox.scrollChildIntoView(selectedCardId);
       const after = scrollBox.scrollTop;
+      if (typeof after === "number") {
+        this.savedScrollTop = after;
+      }
 
       if (before === after && attempt < 4) {
         this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
       }
     }, attempt === 0 ? 0 : 16);
+  }
+
+  private getScrollBox(): {
+    scrollChildIntoView?: (childId: string) => void;
+    scrollTop?: number;
+    scrollTo?: (position: number | { x: number; y: number }) => void;
+  } | undefined {
+    return this.ctx.renderer.root.findDescendantById(this.scrollId) as
+      | {
+          scrollChildIntoView?: (childId: string) => void;
+          scrollTop?: number;
+          scrollTo?: (position: number | { x: number; y: number }) => void;
+        }
+      | undefined;
+  }
+
+  private captureScrollTop(): void {
+    const scrollBox = this.getScrollBox();
+    if (typeof scrollBox?.scrollTop === "number") {
+      this.savedScrollTop = scrollBox.scrollTop;
+    }
+  }
+
+  private restoreScrollTop(): void {
+    const scrollBox = this.getScrollBox();
+    if (scrollBox && typeof scrollBox.scrollTop === "number") {
+      if (scrollBox.scrollTo) {
+        scrollBox.scrollTo({ x: 0, y: this.savedScrollTop });
+      } else {
+        scrollBox.scrollTop = this.savedScrollTop;
+      }
+    }
   }
 
   private async loadProfile(): Promise<void> {

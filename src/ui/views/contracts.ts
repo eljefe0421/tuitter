@@ -33,6 +33,7 @@ export interface ViewDescriptor {
 export interface TuitterView {
   onEnter: () => Promise<void> | void;
   onExit?: () => Promise<void> | void;
+  onAfterRenderSync?: () => void;
   onDidRender?: () => Promise<void> | void;
   render: () => ViewDescriptor;
   handleKey: (key: KeyEvent) => Promise<boolean> | boolean;

@@ -38,6 +38,24 @@ Optional:
 - `X_TOKEN_STORE_PATH`
 - `X_IMAGE_MODE` (`auto`, `kitty`, or `off`)
 
+### Optional screen-time limit
+
+Create a `tuitter.conf` file in the directory where you launch `tuitter`:
+
+```ini
+MAX_SECONDS=3600
+```
+
+- `MAX_SECONDS` sets your maximum allowed usage per day.
+- Daily usage is tracked in a local `.tuitter` state file in that same directory.
+- When the limit is exceeded, tuitter shows a large red warning banner in the UI.
+
+Quick use:
+
+1. Add `MAX_SECONDS=<seconds>` to `tuitter.conf` (example: `MAX_SECONDS=1800` for 30 minutes/day).
+2. Start `tuitter` from that same directory.
+3. When you hit the limit, tuitter blocks usage until the next day.
+
 ### 3) Link and start the app
 
 ```bash

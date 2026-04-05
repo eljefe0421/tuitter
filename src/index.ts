@@ -3,6 +3,7 @@ import { XApiClient } from "./api/client.js";
 import { getAuthenticatedUser } from "./api/users.js";
 import { OAuthSession } from "./auth/oauth-session.js";
 import { loadConfig } from "./config.js";
+import { ScreenTimeTracker } from "./screen-time.js";
 import { TuitterApp } from "./ui/app.js";
 
 async function main(): Promise<void> {
@@ -20,11 +21,12 @@ async function main(): Promise<void> {
   const client = new XApiClient(config, () => oauthSession.getAccessToken(), {
     onUnauthorized: () => oauthSession.forceRefresh(),
   });
+  const screenTimeTracker = new ScreenTimeTracker(config.screenTimeStatePath, config.screenTimeMaxSeconds);
 
   let app: TuitterApp | undefined;
   try {
     const me = await getAuthenticatedUser(client);
-    app = new TuitterApp(renderer, client, me, config.xImageMode);
+    app = new TuitterApp(renderer, client, me, config.xImageMode, screenTimeTracker);
     await app.start();
   } catch (error) {
     renderer.destroy();

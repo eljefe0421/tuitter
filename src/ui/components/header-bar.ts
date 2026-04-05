@@ -1,7 +1,12 @@
 import { Box, Text } from "@opentui/core";
 import { theme } from "../theme.js";
 
-export function renderHeaderBar(viewTitle: string) {
+interface HeaderScreenTime {
+  text: string;
+  color: string;
+}
+
+export function renderHeaderBar(viewTitle: string, screenTime?: HeaderScreenTime) {
   return Box(
     {
       id: "header-bar",
@@ -17,6 +22,19 @@ export function renderHeaderBar(viewTitle: string) {
       alignItems: "center",
     },
     Text({ content: "tuitter", fg: theme.accentStrong }),
-    Text({ content: viewTitle, fg: theme.textPrimary }),
+    Box(
+      {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        flexGrow: 1,
+      },
+      Text({ content: viewTitle, fg: theme.textPrimary }),
+      Text({
+        id: "header-screen-time",
+        content: screenTime ? `  ${screenTime.text}` : "",
+        fg: screenTime?.color ?? theme.textMuted,
+      }),
+    ),
   );
 }

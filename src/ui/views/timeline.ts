@@ -19,6 +19,8 @@ export class TimelineView implements TuitterView {
   private selectedIndex = 0;
   private nextToken: string | undefined;
   private loading = false;
+  private savedScrollTop = 0;
+  private shouldScrollSelectionIntoView = false;
 
   public constructor(ctx: ViewContext) {
     this.ctx = ctx;
@@ -35,6 +37,7 @@ export class TimelineView implements TuitterView {
   }
 
   public render(): ViewDescriptor {
+    this.captureScrollTop();
     if (this.items.length === 0 && this.loading) {
       return {
         title: "Home Timeline",
@@ -115,7 +118,16 @@ export class TimelineView implements TuitterView {
     };
   }
 
+  public onAfterRenderSync(): void {
+    this.restoreScrollTop();
+  }
+
   public async onDidRender(): Promise<void> {
+    if (this.shouldScrollSelectionIntoView) {
+      this.shouldScrollSelectionIntoView = false;
+      await this.scrollSelectedIntoView();
+    }
+
     const selected = this.items[this.selectedIndex];
     if (!selected || this.ctx.inlineImageManager.isDisabled()) {
       await this.ctx.inlineImageManager.reconcileMany([]);
@@ -199,7 +211,7 @@ export class TimelineView implements TuitterView {
   private async moveSelection(delta: number): Promise<void> {
     const nextIndex = Math.max(0, Math.min(this.items.length - 1, this.selectedIndex + delta));
     this.selectedIndex = nextIndex;
-    this.scrollSelectedIntoView();
+    this.shouldScrollSelectionIntoView = true;
     if (this.nextToken && this.selectedIndex >= this.items.length - 3) {
       await this.loadMore();
     }
@@ -251,40 +263,77 @@ export class TimelineView implements TuitterView {
     return Math.max(1, resolution.height / terminalHeight);
   }
 
-  private scrollSelectedIntoView(): void {
+  private async scrollSelectedIntoView(): Promise<void> {
     const selected = this.items[this.selectedIndex];
     if (!selected) {
       return;
     }
 
     const selectedCardId = this.getPostCardId(selected.post.id);
-    this.scrollSelectedIntoViewWithRetry(selectedCardId, 0);
+    await this.scrollSelectedIntoViewWithRetry(selectedCardId, 0);
   }
 
-  private scrollSelectedIntoViewWithRetry(selectedCardId: string, attempt: number): void {
-    setTimeout(() => {
-      const scrollBox = this.ctx.renderer.root.findDescendantById(this.scrollId) as
-        | {
-            scrollChildIntoView?: (childId: string) => void;
-            scrollTop?: number;
-          }
-        | undefined;
+  private async scrollSelectedIntoViewWithRetry(selectedCardId: string, attempt: number): Promise<void> {
+    const scrollBox = this.getScrollBox();
+    if (!scrollBox?.scrollChildIntoView) {
+      if (attempt < 4) {
+        await this.delay(16);
+        await this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
+      }
+      return;
+    }
 
-      if (!scrollBox?.scrollChildIntoView) {
-        if (attempt < 4) {
-          this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
+    const before = scrollBox.scrollTop;
+    scrollBox.scrollChildIntoView(selectedCardId);
+    const after = scrollBox.scrollTop;
+    if (typeof after === "number") {
+      this.savedScrollTop = after;
+    }
+
+    if (before === after && attempt < 4) {
+      await this.delay(16);
+      await this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
+      return;
+    }
+
+    // Let layout settle so image anchors are measured at final scroll position.
+    await this.ctx.renderer.idle();
+  }
+
+  private getScrollBox(): {
+    scrollChildIntoView?: (childId: string) => void;
+    scrollTop?: number;
+    scrollTo?: (position: number | { x: number; y: number }) => void;
+  } | undefined {
+    return this.ctx.renderer.root.findDescendantById(this.scrollId) as
+      | {
+          scrollChildIntoView?: (childId: string) => void;
+          scrollTop?: number;
+          scrollTo?: (position: number | { x: number; y: number }) => void;
         }
-        return;
-      }
+      | undefined;
+  }
 
-      const before = scrollBox.scrollTop;
-      scrollBox.scrollChildIntoView(selectedCardId);
-      const after = scrollBox.scrollTop;
+  private captureScrollTop(): void {
+    const scrollBox = this.getScrollBox();
+    if (typeof scrollBox?.scrollTop === "number") {
+      this.savedScrollTop = scrollBox.scrollTop;
+    }
+  }
 
-      if (before === after && attempt < 4) {
-        this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
+  private restoreScrollTop(): void {
+    const scrollBox = this.getScrollBox();
+    if (scrollBox && typeof scrollBox.scrollTop === "number") {
+      if (scrollBox.scrollTo) {
+        scrollBox.scrollTo({ x: 0, y: this.savedScrollTop });
+      } else {
+        scrollBox.scrollTop = this.savedScrollTop;
       }
-    }, attempt === 0 ? 0 : 16);
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private async loadMore(): Promise<void> {

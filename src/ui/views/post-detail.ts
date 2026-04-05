@@ -18,6 +18,8 @@ export class PostDetailView implements TuitterView {
   private replies: ExpandedPost[] = [];
   private loading = false;
   private selectedReplyIndex = -1;
+  private savedScrollTop = 0;
+  private shouldScrollSelectionIntoView = false;
 
   public constructor(ctx: ViewContext, rootPost: ExpandedPost) {
     this.ctx = ctx;
@@ -33,6 +35,7 @@ export class PostDetailView implements TuitterView {
   }
 
   public render(): ViewDescriptor {
+    this.captureScrollTop();
     const useInlineOverlay = !this.ctx.inlineImageManager.isDisabled();
     const replyNodes = this.replies.length
       ? this.replies.map((item, index) =>
@@ -122,7 +125,16 @@ export class PostDetailView implements TuitterView {
     };
   }
 
+  public onAfterRenderSync(): void {
+    this.restoreScrollTop();
+  }
+
   public async onDidRender(): Promise<void> {
+    if (this.shouldScrollSelectionIntoView) {
+      this.shouldScrollSelectionIntoView = false;
+      this.scrollSelectedIntoView();
+    }
+
     const selected = this.getSelectedPost();
     if (!selected || this.ctx.inlineImageManager.isDisabled()) {
       await this.ctx.inlineImageManager.reconcileMany([]);
@@ -220,7 +232,7 @@ export class PostDetailView implements TuitterView {
     const min = -1;
     const max = this.replies.length - 1;
     this.selectedReplyIndex = Math.max(min, Math.min(max, this.selectedReplyIndex + delta));
-    this.scrollSelectedIntoView();
+    this.shouldScrollSelectionIntoView = true;
   }
 
   private getPostCardId(postId: string): string {
@@ -245,12 +257,7 @@ export class PostDetailView implements TuitterView {
 
   private scrollSelectedIntoViewWithRetry(selectedCardId: string, attempt: number): void {
     setTimeout(() => {
-      const scrollBox = this.ctx.renderer.root.findDescendantById(this.scrollId) as
-        | {
-            scrollChildIntoView?: (childId: string) => void;
-            scrollTop?: number;
-          }
-        | undefined;
+      const scrollBox = this.getScrollBox();
 
       if (!scrollBox?.scrollChildIntoView) {
         if (attempt < 4) {
@@ -262,11 +269,46 @@ export class PostDetailView implements TuitterView {
       const before = scrollBox.scrollTop;
       scrollBox.scrollChildIntoView(selectedCardId);
       const after = scrollBox.scrollTop;
+      if (typeof after === "number") {
+        this.savedScrollTop = after;
+      }
 
       if (before === after && attempt < 4) {
         this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
       }
     }, attempt === 0 ? 0 : 16);
+  }
+
+  private getScrollBox(): {
+    scrollChildIntoView?: (childId: string) => void;
+    scrollTop?: number;
+    scrollTo?: (position: number | { x: number; y: number }) => void;
+  } | undefined {
+    return this.ctx.renderer.root.findDescendantById(this.scrollId) as
+      | {
+          scrollChildIntoView?: (childId: string) => void;
+          scrollTop?: number;
+          scrollTo?: (position: number | { x: number; y: number }) => void;
+        }
+      | undefined;
+  }
+
+  private captureScrollTop(): void {
+    const scrollBox = this.getScrollBox();
+    if (typeof scrollBox?.scrollTop === "number") {
+      this.savedScrollTop = scrollBox.scrollTop;
+    }
+  }
+
+  private restoreScrollTop(): void {
+    const scrollBox = this.getScrollBox();
+    if (scrollBox && typeof scrollBox.scrollTop === "number") {
+      if (scrollBox.scrollTo) {
+        scrollBox.scrollTo({ x: 0, y: this.savedScrollTop });
+      } else {
+        scrollBox.scrollTop = this.savedScrollTop;
+      }
+    }
   }
 
   private getMediaAnchorHeightRows(item: ExpandedPost): number {

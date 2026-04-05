@@ -10,6 +10,7 @@ dist/
 
 # local auth cache (if stored in repo)
 .tuitter/
+.tuitter
 oauth-token.json
 
 # logs / OS files
