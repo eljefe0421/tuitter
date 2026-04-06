@@ -1,5 +1,6 @@
 import { Box, ScrollBox, Text, type KeyEvent } from "@opentui/core";
-import { getLocalTimeline } from "../../api/local-adapter.js";
+import { execSync } from "node:child_process";
+import { getLocalTimeline, getRandomBookmark, getTweetUrl } from "../../api/local-adapter.js";
 import { getStats } from "../../db.js";
 import type { ExpandedPost } from "../../types.js";
 import { renderPostCard } from "../components/post-card.js";
@@ -22,6 +23,7 @@ export class TimelineView implements TuitterView {
   private offset = 0;
   private hasMore = false;
   private loading = false;
+  private sortOrder: "newest" | "oldest" = "newest";
   private savedScrollTop = 0;
   private shouldScrollSelectionIntoView = false;
 
@@ -81,12 +83,14 @@ export class TimelineView implements TuitterView {
         mediaAnchorId: selected ? this.getPostMediaAnchorId(item.post.id) : undefined,
         mediaAnchorHeight: selected ? this.getMediaAnchorHeightRows(item) : undefined,
         useInlineMediaOverlay: selected && useInlineOverlay,
+        categories: item.categories,
+        source: item.source,
       });
     });
 
     return {
       title,
-      hints: "j/k: nav | Enter: detail | p: profile | /: search | c: categories | q: back",
+      hints: `j/k: nav | Enter: detail | p: profile | /: search | c: categories | s: stumble | t: sort (${this.sortOrder}) | o: open | y: copy | q: back`,
       content: Box(
         {
           width: "100%",
@@ -177,6 +181,57 @@ export class TimelineView implements TuitterView {
         return true;
       }
       await this.ctx.pushProfile(username);
+      return true;
+    }
+
+    if (isKey(key, "s")) {
+      const random = getRandomBookmark();
+      if (random) {
+        await this.ctx.pushPostDetail(random);
+        this.ctx.setStatus("Stumble!");
+      }
+      return true;
+    }
+
+    if (isKey(key, "t")) {
+      this.sortOrder = this.sortOrder === "newest" ? "oldest" : "newest";
+      this.items = [];
+      this.offset = 0;
+      this.selectedIndex = 0;
+      this.hasMore = false;
+      this.savedScrollTop = 0;
+      this.loadMore();
+      this.ctx.setStatus(`Sort: ${this.sortOrder} first.`);
+      return true;
+    }
+
+    if (isKey(key, "o")) {
+      const url = getTweetUrl(selected);
+      if (url) {
+        try {
+          execSync(`open "${url}"`);
+          this.ctx.setStatus("Opened in browser.");
+        } catch {
+          this.ctx.setStatus("Failed to open browser.");
+        }
+      } else {
+        this.ctx.setStatus("No tweet URL available.");
+      }
+      return true;
+    }
+
+    if (isKey(key, "y")) {
+      const url = getTweetUrl(selected);
+      if (url) {
+        try {
+          execSync(`printf '%s' '${url}' | pbcopy`);
+          this.ctx.setStatus("URL copied!");
+        } catch {
+          this.ctx.setStatus("Failed to copy.");
+        }
+      } else {
+        this.ctx.setStatus("No tweet URL available.");
+      }
       return true;
     }
 
@@ -303,6 +358,7 @@ export class TimelineView implements TuitterView {
       offset: this.offset,
       maxResults: 20,
       categorySlug: this.categorySlug,
+      sort: this.sortOrder,
     });
     this.items = [...this.items, ...page.items];
     this.hasMore = !!page.nextToken;

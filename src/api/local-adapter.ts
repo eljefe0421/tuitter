@@ -13,6 +13,7 @@ import {
   searchBookmarks,
   totalBookmarkCount,
   getAuthor,
+  randomBookmark,
 } from "../db.js";
 
 function rowToPost(row: BookmarkRow): XPost {
@@ -64,6 +65,8 @@ export function bookmarkToExpandedPost(row: BookmarkRow): ExpandedPost {
     post: rowToPost(row),
     author: rowToUser(row),
     media: rowToMedia(row),
+    categories: row.categories ?? undefined,
+    source: row.source,
   };
 }
 
@@ -92,10 +95,11 @@ export function getLocalTimeline(opts: {
   offset?: number;
   maxResults?: number;
   categorySlug?: string;
+  sort?: "newest" | "oldest";
 }): TimelinePage {
   const limit = opts.maxResults ?? 20;
   const offset = opts.offset ?? 0;
-  const rows = listBookmarks({ limit: limit + 1, offset, categorySlug: opts.categorySlug });
+  const rows = listBookmarks({ limit: limit + 1, offset, categorySlug: opts.categorySlug, sort: opts.sort });
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
 
@@ -131,6 +135,26 @@ export function getLocalUser(handle: string): XUser | null {
   const row = getAuthor(handle);
   if (!row) return null;
   return authorRowToUser(row);
+}
+
+export function getRandomBookmark(): ExpandedPost | null {
+  const row = randomBookmark();
+  if (!row) return null;
+  return bookmarkToExpandedPost(row);
+}
+
+export function getTweetUrl(post: ExpandedPost): string | null {
+  const tweetId = post.post.id;
+  const handle = post.author?.username;
+  // Try to build URL from tweetId — check if the DB row has a tweetId field
+  // The post.id is the Xtract internal ID, not the tweet ID
+  // We need to look up the actual tweetId from the DB
+  const detail = getBookmarkDetail(tweetId);
+  if (detail?.tweetId) {
+    const author = detail.authorHandle !== "unknown" ? detail.authorHandle : "i";
+    return `https://x.com/${author}/status/${detail.tweetId}`;
+  }
+  return null;
 }
 
 export function searchLocal(query: string, limit = 50): TimelinePage {

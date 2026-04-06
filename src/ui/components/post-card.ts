@@ -11,6 +11,8 @@ export interface PostCardState {
   mediaAnchorId?: string;
   mediaAnchorHeight?: number;
   useInlineMediaOverlay?: boolean;
+  categories?: string;
+  source?: string;
 }
 
 const INLINE_MEDIA_HEIGHT = 12;
@@ -97,5 +99,18 @@ export function renderPostCard(item: ExpandedPost, state: PostCardState = {}) {
       : selected && mediaSummary
         ? Text({ content: "Kitty preview unavailable.", fg: theme.textMuted })
         : null,
+    state.categories || (state.source && state.source !== "bookmark")
+      ? Box(
+          { width: "100%", flexDirection: "row", gap: 1 },
+          ...(state.categories
+            ? state.categories.split(",").map((cat) =>
+                Text({ content: `[${cat.trim()}]`, fg: theme.accent }),
+              )
+            : []),
+          state.source && state.source !== "bookmark"
+            ? Text({ content: `[${state.source}]`, fg: theme.warning })
+            : null,
+        )
+      : null,
   );
 }

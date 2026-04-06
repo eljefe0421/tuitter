@@ -1,5 +1,5 @@
 import { Box, ScrollBox, Text, type KeyEvent } from "@opentui/core";
-import { listCategories, type CategoryRow } from "../../db.js";
+import { listCategories, totalBookmarkCount, type CategoryRow } from "../../db.js";
 import { theme } from "../theme.js";
 import type { TuitterView, ViewContext, ViewDescriptor } from "./contracts.js";
 import { isKey } from "./contracts.js";
@@ -7,6 +7,7 @@ import { isKey } from "./contracts.js";
 export class CategoryView implements TuitterView {
   private readonly ctx: ViewContext;
   private categories: CategoryRow[] = [];
+  private totalCount = 0;
   private selectedIndex = 0;
 
   public constructor(ctx: ViewContext) {
@@ -15,7 +16,8 @@ export class CategoryView implements TuitterView {
 
   public onEnter(): void {
     this.categories = listCategories();
-    this.ctx.setStatus(`${this.categories.length} categories.`);
+    this.totalCount = totalBookmarkCount();
+    this.ctx.setStatus(`${this.categories.length} categories, ${this.totalCount.toLocaleString()} bookmarks.`);
   }
 
   public render(): ViewDescriptor {
@@ -30,8 +32,36 @@ export class CategoryView implements TuitterView {
       };
     }
 
-    const children = this.categories.map((cat, index) => {
-      const selected = index === this.selectedIndex;
+    // "All Bookmarks" at index 0, then categories at index 1+
+    const allSelected = this.selectedIndex === 0;
+    const allRow = Box(
+      {
+        id: "cat-all",
+        width: "100%",
+        borderStyle: "rounded",
+        borderColor: allSelected ? theme.accent : theme.border,
+        backgroundColor: allSelected ? theme.selection : theme.surface,
+        padding: 1,
+        marginBottom: 1,
+        flexDirection: "row",
+        gap: 2,
+      },
+      Box(
+        { width: 3, height: 1, alignItems: "center", justifyContent: "center" },
+        Text({ content: "★", fg: theme.accentStrong }),
+      ),
+      Box(
+        { flexGrow: 1, flexDirection: "column" },
+        Text({ content: "All Bookmarks", fg: theme.textPrimary }),
+      ),
+      Text({
+        content: `${this.totalCount.toLocaleString()}`,
+        fg: allSelected ? theme.accentStrong : theme.textMuted,
+      }),
+    );
+
+    const catRows = this.categories.map((cat, index) => {
+      const selected = index + 1 === this.selectedIndex;
       return Box(
         {
           id: `cat-${cat.slug}`,
@@ -68,6 +98,8 @@ export class CategoryView implements TuitterView {
       );
     });
 
+    const children = [allRow, ...catRows];
+
     return {
       title: `Categories (${this.categories.length})`,
       hints: "j/k: nav | Enter: browse | q: back",
@@ -96,8 +128,11 @@ export class CategoryView implements TuitterView {
   }
 
   public async handleKey(key: KeyEvent): Promise<boolean> {
+    // Total items = 1 (All) + categories.length
+    const maxIndex = this.categories.length; // 0 = All, 1..N = categories
+
     if (isKey(key, "j", "down")) {
-      this.selectedIndex = Math.min(this.categories.length - 1, this.selectedIndex + 1);
+      this.selectedIndex = Math.min(maxIndex, this.selectedIndex + 1);
       return true;
     }
 
@@ -107,9 +142,14 @@ export class CategoryView implements TuitterView {
     }
 
     if (isKey(key, "return", "enter")) {
-      const cat = this.categories[this.selectedIndex];
-      if (cat) {
-        await this.ctx.pushCategoryTimeline(cat.slug, cat.name);
+      if (this.selectedIndex === 0) {
+        // "All Bookmarks" — pop category view, go to unfiltered timeline
+        this.ctx.popView();
+      } else {
+        const cat = this.categories[this.selectedIndex - 1];
+        if (cat) {
+          await this.ctx.pushCategoryTimeline(cat.slug, cat.name);
+        }
       }
       return true;
     }

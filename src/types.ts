@@ -87,6 +87,9 @@ export interface ExpandedPost {
   post: XPost;
   author?: XUser;
   media?: XMedia[];
+  // Local metadata from Xtract DB
+  categories?: string;
+  source?: string;
 }
 
 export interface TimelinePage {

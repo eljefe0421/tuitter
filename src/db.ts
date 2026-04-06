@@ -217,6 +217,17 @@ export function searchBookmarks(query: string, limit = 50): BookmarkRow[] {
     .all(pattern, pattern, pattern, pattern, limit) as BookmarkRow[];
 }
 
+export function randomBookmark(): BookmarkRow | null {
+  return db()
+    .prepare(
+      `${BOOKMARK_SELECT}
+    GROUP BY b.id
+    ORDER BY RANDOM()
+    LIMIT 1`,
+    )
+    .get() as BookmarkRow | null;
+}
+
 export function totalBookmarkCount(categorySlug?: string, authorHandle?: string): number {
   const d = db();
   if (authorHandle) {

@@ -1,5 +1,6 @@
 import { Box, ScrollBox, Text, type KeyEvent } from "@opentui/core";
-import { getLocalPostDetail } from "../../api/local-adapter.js";
+import { execSync } from "node:child_process";
+import { getLocalPostDetail, getTweetUrl } from "../../api/local-adapter.js";
 import { getBookmarkDetail } from "../../db.js";
 import type { ExpandedPost } from "../../types.js";
 import { renderPostCard } from "../components/post-card.js";
@@ -18,6 +19,8 @@ export class PostDetailView implements TuitterView {
   private readonly rootPost: ExpandedPost;
   private categories: string[] = [];
   private semanticTags: string[] = [];
+  private entities: Record<string, string[]> = {};
+  private source = "";
   private savedScrollTop = 0;
 
   public constructor(ctx: ViewContext, rootPost: ExpandedPost) {
@@ -40,6 +43,17 @@ export class PostDetailView implements TuitterView {
           this.semanticTags = [];
         }
       }
+      if (detail.entities) {
+        try {
+          const parsed = JSON.parse(detail.entities);
+          if (parsed && typeof parsed === "object") {
+            this.entities = parsed;
+          }
+        } catch {
+          this.entities = {};
+        }
+      }
+      this.source = detail.source || "";
       // Upgrade media if the detail has more than the summary row
       const fullPost = getLocalPostDetail(this.rootPost.post.id);
       if (fullPost && fullPost.media && fullPost.media.length > (this.rootPost.media?.length ?? 0)) {
@@ -78,9 +92,33 @@ export class PostDetailView implements TuitterView {
       );
     }
 
+    // Entities (hashtags, mentions, URLs, tools, etc.)
+    for (const [key, values] of Object.entries(this.entities)) {
+      if (Array.isArray(values) && values.length > 0) {
+        const label = key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, " ") + ":";
+        metaChildren.push(
+          Box(
+            { width: "100%", flexDirection: "row", gap: 1 },
+            Text({ content: label, fg: theme.accent }),
+            Text({ content: values.join(", "), fg: theme.textPrimary }),
+          ),
+        );
+      }
+    }
+
+    if (this.source && this.source !== "bookmark") {
+      metaChildren.push(
+        Box(
+          { width: "100%", flexDirection: "row", gap: 1 },
+          Text({ content: "Source:", fg: theme.accent }),
+          Text({ content: this.source, fg: theme.textPrimary }),
+        ),
+      );
+    }
+
     return {
       title: "Bookmark Detail",
-      hints: "p: profile | q: back",
+      hints: "p: profile | o: open | y: copy URL | q: back",
       content: Box(
         {
           width: "100%",
@@ -168,6 +206,36 @@ export class PostDetailView implements TuitterView {
         return true;
       }
       await this.ctx.pushProfile(username);
+      return true;
+    }
+
+    if (isKey(key, "o")) {
+      const url = getTweetUrl(this.rootPost);
+      if (url) {
+        try {
+          execSync(`open "${url}"`);
+          this.ctx.setStatus("Opened in browser.");
+        } catch {
+          this.ctx.setStatus("Failed to open browser.");
+        }
+      } else {
+        this.ctx.setStatus("No tweet URL available.");
+      }
+      return true;
+    }
+
+    if (isKey(key, "y")) {
+      const url = getTweetUrl(this.rootPost);
+      if (url) {
+        try {
+          execSync(`printf '%s' '${url}' | pbcopy`);
+          this.ctx.setStatus("URL copied!");
+        } catch {
+          this.ctx.setStatus("Failed to copy.");
+        }
+      } else {
+        this.ctx.setStatus("No tweet URL available.");
+      }
       return true;
     }
 
