@@ -1,28 +1,21 @@
 import { Box, CliRenderEvents, type CliRenderer, type KeyEvent } from "@opentui/core";
-import { bookmarkPost, likePost, unbookmarkPost, unlikePost } from "../api/index.js";
-import { XApiError, type XApiClient } from "../api/client.js";
 import type { XImageMode } from "../config.js";
 import { ScreenTimeTracker } from "../screen-time.js";
-import type { ExpandedPost, XUser } from "../types.js";
+import type { ExpandedPost } from "../types.js";
 import { renderHeaderBar, renderScreenTimeWarning, renderStatusBar } from "./components/index.js";
 import { ExplosionAnimation } from "./components/explosion.js";
 import { InlineImageManager } from "./media/inline-image-manager.js";
 import { theme } from "./theme.js";
-import { ComposeView } from "./views/compose.js";
-import { isKey, type TuitterView, type ComposerRequest, type ViewContext } from "./views/contracts.js";
+import { CategoryView } from "./views/category.js";
+import { isKey, type TuitterView, type ViewContext } from "./views/contracts.js";
 import { PostDetailView } from "./views/post-detail.js";
-import { ProfileJumpView } from "./views/profile-jump.js";
 import { ProfileView } from "./views/profile.js";
+import { SearchView } from "./views/search.js";
 import { TimelineView } from "./views/timeline.js";
 
 export class TuitterApp {
-  private static readonly PROFILE_JUMP_HINT = "cmd-k: jump profile";
   private readonly renderer: CliRenderer;
-  private readonly client: XApiClient;
-  private readonly me: XUser;
   private readonly views: TuitterView[] = [];
-  private readonly likedPostIds = new Set<string>();
-  private readonly bookmarkedPostIds = new Set<string>();
   private statusMessage = "Ready";
   private handlingKey = false;
   private renderCycle = 0;
@@ -50,14 +43,10 @@ export class TuitterApp {
 
   public constructor(
     renderer: CliRenderer,
-    client: XApiClient,
-    me: XUser,
     imageMode: XImageMode,
     screenTimeTracker?: ScreenTimeTracker,
   ) {
     this.renderer = renderer;
-    this.client = client;
-    this.me = me;
     this.screenTimeTracker = screenTimeTracker;
     const inlineImageManager = new InlineImageManager(this.renderer, imageMode, (message) => {
       this.statusMessage = message;
@@ -66,21 +55,17 @@ export class TuitterApp {
     this.viewContext = {
       renderer: this.renderer,
       inlineImageManager,
-      client: this.client,
-      me: this.me,
       setStatus: (message) => {
         this.statusMessage = message;
       },
       pushPostDetail: async (post) => this.pushView(new PostDetailView(this.viewContext, post)),
       pushProfile: async (username) => this.pushView(new ProfileView(this.viewContext, username)),
-      pushComposer: async (request) => this.pushView(new ComposeView(this.viewContext, request)),
+      pushSearch: async () => this.pushView(new SearchView(this.viewContext)),
+      pushCategories: async () => this.pushView(new CategoryView(this.viewContext)),
+      pushCategoryTimeline: async (slug, name) => this.pushView(new TimelineView(this.viewContext, slug, name)),
       popView: () => {
         void this.popView();
       },
-      toggleLike: async (postId) => this.toggleLike(postId),
-      toggleBookmark: async (postId) => this.toggleBookmark(postId),
-      isLiked: (postId) => this.likedPostIds.has(postId),
-      isBookmarked: (postId) => this.bookmarkedPostIds.has(postId),
     };
 
     this.keyHandler = (key: KeyEvent) => {
@@ -106,9 +91,9 @@ export class TuitterApp {
       }, 1000);
     }
 
-    // Kitty graphics writes use process.stdout directly.
-    // OpenTUI intercepts stdout by default, which can swallow those escapes.
-    this.renderer.disableStdoutInterception();
+    if (typeof this.renderer.disableStdoutInterception === "function") {
+      this.renderer.disableStdoutInterception();
+    }
     this.renderer.on(CliRenderEvents.RESIZE, this.rendererRefreshHandler);
     this.renderer.on(CliRenderEvents.CAPABILITIES, this.rendererRefreshHandler);
     await this.pushView(new TimelineView(this.viewContext));
@@ -140,7 +125,6 @@ export class TuitterApp {
   }
 
   private async pushView(view: TuitterView): Promise<void> {
-    // Prevent stuck kitty overlays when transitioning to another view.
     await this.viewContext.inlineImageManager.clearAll();
     this.views.push(view);
     await view.onEnter();
@@ -153,7 +137,6 @@ export class TuitterApp {
       this.renderer.destroy();
       return;
     }
-
     const current = this.views.pop();
     await current?.onExit?.();
     this.render();
@@ -165,9 +148,7 @@ export class TuitterApp {
 
   private render(): void {
     const view = this.currentView();
-    if (!view) {
-      return;
-    }
+    if (!view) return;
     this.renderCycle += 1;
     const cycle = this.renderCycle;
 
@@ -177,7 +158,10 @@ export class TuitterApp {
     const screenTimeSnapshot = this.screenTimeTracker?.snapshot();
     const screenTimeIndicator = this.getScreenTimeIndicator(screenTimeSnapshot);
     const statusMessage = this.withScreenTimeStatus(this.statusMessage, screenTimeSnapshot);
-    const hints = this.isScreenTimeBlocked() || this.explosionAnimation ? "q/esc: exit" : this.withGlobalHints(descriptor.hints);
+    const hints =
+      this.isScreenTimeBlocked() || this.explosionAnimation
+        ? "q/esc: exit"
+        : descriptor.hints;
     const shellChildren: any[] = [renderHeaderBar(descriptor.title, screenTimeIndicator)];
     shellChildren.push(
       Box(
@@ -207,25 +191,26 @@ export class TuitterApp {
     if (this.explosionAnimation) {
       rootChildren.push(this.explosionAnimation.render());
     } else if (screenTimeSnapshot?.exceeded && screenTimeSnapshot.maxSeconds !== undefined) {
-      rootChildren.push(renderScreenTimeWarning(screenTimeSnapshot.secondsToday, screenTimeSnapshot.maxSeconds));
+      rootChildren.push(
+        renderScreenTimeWarning(screenTimeSnapshot.secondsToday, screenTimeSnapshot.maxSeconds),
+      );
     }
     for (const child of rootChildren) {
       this.renderer.root.add(child);
     }
     view.onAfterRenderSync?.();
 
-    void this.renderer.idle().then(async () => {
-      if (cycle !== this.renderCycle || this.currentView() !== view) {
-        return;
-      }
-      if (this.isScreenTimeBlocked() || this.explosionAnimation) {
-        return;
-      }
-      await view.onDidRender?.();
-    }).catch((error) => {
-      this.statusMessage = `Error: ${this.formatError(error)}`;
-      this.render();
-    });
+    void this.renderer
+      .idle()
+      .then(async () => {
+        if (cycle !== this.renderCycle || this.currentView() !== view) return;
+        if (this.isScreenTimeBlocked() || this.explosionAnimation) return;
+        await view.onDidRender?.();
+      })
+      .catch((error) => {
+        this.statusMessage = `Error: ${(error as Error).message}`;
+        this.render();
+      });
   }
 
   private clearRoot(): void {
@@ -235,9 +220,7 @@ export class TuitterApp {
   }
 
   private async handleKeyPress(key: KeyEvent): Promise<void> {
-    if (this.handlingKey) {
-      return;
-    }
+    if (this.handlingKey) return;
     this.handlingKey = true;
 
     try {
@@ -256,33 +239,22 @@ export class TuitterApp {
       }
 
       const view = this.currentView();
-      if (!view) {
-        return;
-      }
+      if (!view) return;
 
       const handled = await view.handleKey(key);
       if (handled) {
         this.render();
       }
     } catch (error) {
-      this.statusMessage = `Error: ${this.formatError(error)}`;
+      this.statusMessage = `Error: ${(error as Error).message}`;
       this.render();
     } finally {
       this.handlingKey = false;
     }
   }
 
-  private formatError(error: unknown): string {
-    if (error instanceof XApiError && error.status === 403) {
-      return `${error.message}. Check X app permissions and requested OAuth scopes (tweet.read/users.read/tweet.write/like.write/bookmark.write).`;
-    }
-    return (error as Error).message;
-  }
-
   private async tickScreenTime(): Promise<void> {
-    if (!this.screenTimeTracker) {
-      return;
-    }
+    if (!this.screenTimeTracker) return;
 
     const snapshot = this.screenTimeTracker.snapshot();
     if (snapshot.secondsToday !== this.lastScreenTimeSeconds) {
@@ -309,9 +281,7 @@ export class TuitterApp {
     maxSeconds?: number;
     exceeded: boolean;
   }): void {
-    if (snapshot.maxSeconds === undefined) {
-      return;
-    }
+    if (snapshot.maxSeconds === undefined) return;
 
     const remainingSeconds = snapshot.maxSeconds - snapshot.secondsToday;
     const headerColor =
@@ -341,9 +311,7 @@ export class TuitterApp {
     this.explosionAnimation = new ExplosionAnimation(cols, rows);
     this.render();
     this.explosionInterval = setInterval(() => {
-      if (!this.explosionAnimation) {
-        return;
-      }
+      if (!this.explosionAnimation) return;
       this.explosionAnimation.advance();
       if (this.explosionAnimation.isComplete()) {
         clearInterval(this.explosionInterval!);
@@ -361,17 +329,12 @@ export class TuitterApp {
     baseMessage: string,
     snapshot: { secondsToday: number; maxSeconds?: number; exceeded: boolean } | undefined,
   ): string {
-    if (!snapshot || snapshot.maxSeconds === undefined) {
-      return baseMessage;
-    }
+    if (!snapshot || snapshot.maxSeconds === undefined) return baseMessage;
     const used = this.formatDuration(snapshot.secondsToday);
     const max = this.formatDuration(snapshot.maxSeconds);
     const remaining = this.formatDuration(snapshot.maxSeconds - snapshot.secondsToday);
     const timer = `Screen: ${used}/${max} (left ${remaining})`;
-
-    if (snapshot.exceeded) {
-      return `Daily screen-time limit reached. ${timer}`;
-    }
+    if (snapshot.exceeded) return `Daily screen-time limit reached. ${timer}`;
     return `${baseMessage} | ${timer}`;
   }
 
@@ -386,22 +349,26 @@ export class TuitterApp {
   private getScreenTimeIndicator(
     snapshot: { secondsToday: number; maxSeconds?: number; exceeded: boolean } | undefined,
   ): { text: string; color: string } | undefined {
-    if (!snapshot || snapshot.maxSeconds === undefined) {
-      return undefined;
-    }
+    if (!snapshot || snapshot.maxSeconds === undefined) return undefined;
     const remainingSeconds = snapshot.maxSeconds - snapshot.secondsToday;
     const color =
       remainingSeconds < 10 ? theme.danger : remainingSeconds < 60 ? theme.warning : theme.success;
-    return {
-      text: `left ${this.formatDuration(remainingSeconds)}`,
-      color,
-    };
+    return { text: `left ${this.formatDuration(remainingSeconds)}`, color };
   }
 
   private async handleGlobalKey(key: KeyEvent): Promise<boolean> {
-    if (this.isProfileJumpShortcut(key)) {
-      if (!(this.currentView() instanceof ProfileJumpView)) {
-        await this.pushView(new ProfileJumpView(this.viewContext));
+    // / = search
+    if (isKey(key, "/")) {
+      if (!(this.currentView() instanceof SearchView)) {
+        await this.viewContext.pushSearch();
+      }
+      return true;
+    }
+
+    // c = categories
+    if (isKey(key, "c")) {
+      if (!(this.currentView() instanceof CategoryView)) {
+        await this.viewContext.pushCategories();
       }
       return true;
     }
@@ -411,50 +378,5 @@ export class TuitterApp {
       return true;
     }
     return false;
-  }
-
-  private withGlobalHints(viewHints: string): string {
-    if (viewHints.includes("cmd-k")) {
-      return viewHints;
-    }
-    return `${viewHints} | ${TuitterApp.PROFILE_JUMP_HINT}`;
-  }
-
-  private isProfileJumpShortcut(key: KeyEvent): boolean {
-    const hasCommandModifier = key.meta || key.super;
-    if (!hasCommandModifier) {
-      return false;
-    }
-    return isKey(key, "k", "p");
-  }
-
-  private async toggleLike(postId: string): Promise<boolean> {
-    if (this.likedPostIds.has(postId)) {
-      await unlikePost(this.client, this.me.id, postId);
-      this.likedPostIds.delete(postId);
-      return false;
-    }
-    await likePost(this.client, this.me.id, postId);
-    this.likedPostIds.add(postId);
-    return true;
-  }
-
-  private async toggleBookmark(postId: string): Promise<boolean> {
-    if (this.bookmarkedPostIds.has(postId)) {
-      await unbookmarkPost(this.client, this.me.id, postId);
-      this.bookmarkedPostIds.delete(postId);
-      return false;
-    }
-    await bookmarkPost(this.client, this.me.id, postId);
-    this.bookmarkedPostIds.add(postId);
-    return true;
-  }
-
-  public async openComposer(request: ComposerRequest): Promise<void> {
-    await this.pushView(new ComposeView(this.viewContext, request));
-  }
-
-  public async openPostDetail(post: ExpandedPost): Promise<void> {
-    await this.pushView(new PostDetailView(this.viewContext, post));
   }
 }

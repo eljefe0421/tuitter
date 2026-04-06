@@ -1,5 +1,6 @@
 import { Box, ScrollBox, Text, type KeyEvent } from "@opentui/core";
-import { getConversationReplies } from "../../api/posts.js";
+import { getLocalPostDetail } from "../../api/local-adapter.js";
+import { getBookmarkDetail } from "../../db.js";
 import type { ExpandedPost } from "../../types.js";
 import { renderPostCard } from "../components/post-card.js";
 import { getPostPrimaryImageDimensions, getPostPrimaryImageUrl } from "../media/post-image-preview.js";
@@ -15,19 +16,36 @@ export class PostDetailView implements TuitterView {
   private readonly scrollId = "post-detail-scroll";
   private readonly ctx: ViewContext;
   private readonly rootPost: ExpandedPost;
-  private replies: ExpandedPost[] = [];
-  private loading = false;
-  private selectedReplyIndex = -1;
+  private categories: string[] = [];
+  private semanticTags: string[] = [];
   private savedScrollTop = 0;
-  private shouldScrollSelectionIntoView = false;
 
   public constructor(ctx: ViewContext, rootPost: ExpandedPost) {
     this.ctx = ctx;
     this.rootPost = rootPost;
   }
 
-  public async onEnter(): Promise<void> {
-    await this.loadReplies();
+  public onEnter(): void {
+    // Load enrichment metadata from the DB
+    const detail = getBookmarkDetail(this.rootPost.post.id);
+    if (detail) {
+      if (detail.categories) {
+        this.categories = detail.categories.split(",").map((s) => s.trim());
+      }
+      if (detail.semanticTags) {
+        try {
+          const parsed = JSON.parse(detail.semanticTags);
+          this.semanticTags = Array.isArray(parsed) ? parsed : [];
+        } catch {
+          this.semanticTags = [];
+        }
+      }
+      // Upgrade media if the detail has more than the summary row
+      const fullPost = getLocalPostDetail(this.rootPost.post.id);
+      if (fullPost && fullPost.media && fullPost.media.length > (this.rootPost.media?.length ?? 0)) {
+        (this.rootPost as any).media = fullPost.media;
+      }
+    }
   }
 
   public async onExit(): Promise<void> {
@@ -37,41 +55,32 @@ export class PostDetailView implements TuitterView {
   public render(): ViewDescriptor {
     this.captureScrollTop();
     const useInlineOverlay = !this.ctx.inlineImageManager.isDisabled();
-    const replyNodes = this.replies.length
-      ? this.replies.map((item, index) =>
-          renderPostCard(item, {
-            id: this.getPostCardId(item.post.id),
-            selected: this.selectedReplyIndex === index,
-            liked: this.ctx.isLiked(item.post.id),
-            bookmarked: this.ctx.isBookmarked(item.post.id),
-            avatarAnchorId: this.getPostAvatarAnchorId(item.post.id),
-            useInlineAvatarOverlay: useInlineOverlay,
-            mediaAnchorId:
-              this.selectedReplyIndex === index ? this.getPostMediaAnchorId(item.post.id) : undefined,
-            mediaAnchorHeight:
-              this.selectedReplyIndex === index ? this.getMediaAnchorHeightRows(item) : undefined,
-            useInlineMediaOverlay: this.selectedReplyIndex === index && useInlineOverlay,
-          }),
-        )
-      : [
-          Box(
-            {
-              width: "100%",
-              padding: 1,
-              borderStyle: "rounded",
-              borderColor: theme.border,
-              backgroundColor: theme.surface,
-            },
-            Text({
-              content: this.loading ? "Loading replies..." : "No replies found.",
-              fg: theme.textMuted,
-            }),
-          ),
-        ];
+
+    const metaChildren: any[] = [];
+
+    if (this.categories.length > 0) {
+      metaChildren.push(
+        Box(
+          { width: "100%", flexDirection: "row", gap: 1 },
+          Text({ content: "Categories:", fg: theme.accent }),
+          Text({ content: this.categories.join(", "), fg: theme.textPrimary }),
+        ),
+      );
+    }
+
+    if (this.semanticTags.length > 0) {
+      metaChildren.push(
+        Box(
+          { width: "100%", flexDirection: "row", gap: 1 },
+          Text({ content: "Tags:", fg: theme.accent }),
+          Text({ content: this.semanticTags.join(", "), fg: theme.textPrimary }),
+        ),
+      );
+    }
 
     return {
-      title: "Post Detail",
-      hints: "j/k: navigate replies | l: like | b: bookmark | r: reply | Enter: open reply | q: back",
+      title: "Bookmark Detail",
+      hints: "p: profile | q: back",
       content: Box(
         {
           width: "100%",
@@ -88,38 +97,35 @@ export class PostDetailView implements TuitterView {
             maxWidth: layout.contentColumnMaxWidth,
             height: "100%",
             viewportCulling: true,
-            rootOptions: {
-              backgroundColor: theme.background,
-            },
-            contentOptions: {
-              padding: 1,
-            },
+            rootOptions: { backgroundColor: theme.background },
+            contentOptions: { padding: 1 },
           },
-          Box(
-            {
-              width: "100%",
-              flexDirection: "column",
-              gap: 1,
-            },
-            Text({ content: "Selected Post", fg: theme.accent }),
-            renderPostCard(this.rootPost, {
-              id: this.getPostCardId(this.rootPost.post.id),
-              selected: this.selectedReplyIndex === -1,
-              liked: this.ctx.isLiked(this.rootPost.post.id),
-              bookmarked: this.ctx.isBookmarked(this.rootPost.post.id),
-              avatarAnchorId: this.getPostAvatarAnchorId(this.rootPost.post.id),
-              useInlineAvatarOverlay: useInlineOverlay,
-              mediaAnchorId:
-                this.selectedReplyIndex === -1
-                  ? this.getPostMediaAnchorId(this.rootPost.post.id)
-                  : undefined,
-              mediaAnchorHeight:
-                this.selectedReplyIndex === -1 ? this.getMediaAnchorHeightRows(this.rootPost) : undefined,
-              useInlineMediaOverlay: this.selectedReplyIndex === -1 && useInlineOverlay,
-            }),
-          ),
-          Text({ content: "Replies", fg: theme.accent }),
-          ...replyNodes,
+          renderPostCard(this.rootPost, {
+            id: `post-detail-card-${this.rootPost.post.id}`,
+            selected: true,
+            avatarAnchorId: this.getPostAvatarAnchorId(this.rootPost.post.id),
+            useInlineAvatarOverlay: useInlineOverlay,
+            mediaAnchorId: this.getPostMediaAnchorId(this.rootPost.post.id),
+            mediaAnchorHeight: this.getMediaAnchorHeightRows(this.rootPost),
+            useInlineMediaOverlay: useInlineOverlay,
+          }),
+          ...(metaChildren.length > 0
+            ? [
+                Box(
+                  {
+                    width: "100%",
+                    borderStyle: "rounded",
+                    borderColor: theme.border,
+                    backgroundColor: theme.surface,
+                    padding: 1,
+                    flexDirection: "column",
+                    gap: 1,
+                  },
+                  Text({ content: "Enrichment", fg: theme.accent }),
+                  ...metaChildren,
+                ),
+              ]
+            : []),
         ),
       ),
     };
@@ -130,113 +136,42 @@ export class PostDetailView implements TuitterView {
   }
 
   public async onDidRender(): Promise<void> {
-    if (this.shouldScrollSelectionIntoView) {
-      this.shouldScrollSelectionIntoView = false;
-      this.scrollSelectedIntoView();
-    }
-
-    const selected = this.getSelectedPost();
-    if (!selected || this.ctx.inlineImageManager.isDisabled()) {
+    if (this.ctx.inlineImageManager.isDisabled()) {
       await this.ctx.inlineImageManager.reconcileMany([]);
       return;
     }
 
-    const allPosts = [this.rootPost, ...this.replies];
-    const avatarImages = allPosts.map((item) => ({
-      viewId: this.viewId,
-      postId: item.post.id,
-      kind: "avatar" as const,
-      imageUrl: item.author?.profile_image_url,
-      anchorId: this.getPostAvatarAnchorId(item.post.id),
-      viewportAnchorId: this.scrollId,
-    }));
-
-    const mediaUrl = getPostPrimaryImageUrl(selected);
+    const mediaUrl = getPostPrimaryImageUrl(this.rootPost);
     await this.ctx.inlineImageManager.reconcileMany([
-      ...avatarImages,
       {
         viewId: this.viewId,
-        postId: selected.post.id,
+        postId: this.rootPost.post.id,
+        kind: "avatar" as const,
+        imageUrl: this.rootPost.author?.profile_image_url,
+        anchorId: this.getPostAvatarAnchorId(this.rootPost.post.id),
+      },
+      {
+        viewId: this.viewId,
+        postId: this.rootPost.post.id,
         kind: "media" as const,
         imageUrl: mediaUrl,
-        anchorId: this.getPostMediaAnchorId(selected.post.id),
-        viewportAnchorId: this.scrollId,
+        anchorId: this.getPostMediaAnchorId(this.rootPost.post.id),
       },
     ]);
   }
 
   public async handleKey(key: KeyEvent): Promise<boolean> {
-    if (isKey(key, "j", "down")) {
-      await this.moveSelection(1);
-      return true;
-    }
-
-    if (isKey(key, "k", "up")) {
-      await this.moveSelection(-1);
-      return true;
-    }
-
-    const selected = this.getSelectedPost();
-    if (!selected) {
-      return false;
-    }
-
-    if (isKey(key, "l")) {
-      const liked = await this.ctx.toggleLike(selected.post.id);
-      this.ctx.setStatus(liked ? "Post liked." : "Like removed.");
-      return true;
-    }
-
-    if (isKey(key, "b")) {
-      const bookmarked = await this.ctx.toggleBookmark(selected.post.id);
-      this.ctx.setStatus(bookmarked ? "Post bookmarked." : "Bookmark removed.");
-      return true;
-    }
-
-    if (isKey(key, "r")) {
-      await this.ctx.pushComposer({ inReplyToPostId: selected.post.id });
-      return true;
-    }
-
     if (isKey(key, "p")) {
-      const username = selected.author?.username;
+      const username = this.rootPost.author?.username;
       if (!username) {
-        this.ctx.setStatus("No author profile available.");
+        this.ctx.setStatus("No author info.");
         return true;
       }
       await this.ctx.pushProfile(username);
       return true;
     }
 
-    if (isKey(key, "return", "enter") && this.selectedReplyIndex >= 0) {
-      await this.ctx.pushPostDetail(selected);
-      return true;
-    }
-
     return false;
-  }
-
-  private getSelectedPost(): ExpandedPost | undefined {
-    if (this.selectedReplyIndex === -1) {
-      return this.rootPost;
-    }
-    return this.replies[this.selectedReplyIndex];
-  }
-
-  private async moveSelection(delta: number): Promise<void> {
-    if (this.replies.length === 0) {
-      this.selectedReplyIndex = -1;
-      return;
-    }
-
-    const min = -1;
-    const max = this.replies.length - 1;
-    this.selectedReplyIndex = Math.max(min, Math.min(max, this.selectedReplyIndex + delta));
-    this.shouldScrollSelectionIntoView = true;
-  }
-
-  private getPostCardId(postId: string): string {
-    return `post-detail-post-${postId}`;
   }
 
   private getPostMediaAnchorId(postId: string): string {
@@ -247,75 +182,9 @@ export class PostDetailView implements TuitterView {
     return `post-detail-avatar-${postId}`;
   }
 
-  private scrollSelectedIntoView(): void {
-    const selected = this.getSelectedPost();
-    if (!selected) {
-      return;
-    }
-    this.scrollSelectedIntoViewWithRetry(this.getPostCardId(selected.post.id), 0);
-  }
-
-  private scrollSelectedIntoViewWithRetry(selectedCardId: string, attempt: number): void {
-    setTimeout(() => {
-      const scrollBox = this.getScrollBox();
-
-      if (!scrollBox?.scrollChildIntoView) {
-        if (attempt < 4) {
-          this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
-        }
-        return;
-      }
-
-      const before = scrollBox.scrollTop;
-      scrollBox.scrollChildIntoView(selectedCardId);
-      const after = scrollBox.scrollTop;
-      if (typeof after === "number") {
-        this.savedScrollTop = after;
-      }
-
-      if (before === after && attempt < 4) {
-        this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
-      }
-    }, attempt === 0 ? 0 : 16);
-  }
-
-  private getScrollBox(): {
-    scrollChildIntoView?: (childId: string) => void;
-    scrollTop?: number;
-    scrollTo?: (position: number | { x: number; y: number }) => void;
-  } | undefined {
-    return this.ctx.renderer.root.findDescendantById(this.scrollId) as
-      | {
-          scrollChildIntoView?: (childId: string) => void;
-          scrollTop?: number;
-          scrollTo?: (position: number | { x: number; y: number }) => void;
-        }
-      | undefined;
-  }
-
-  private captureScrollTop(): void {
-    const scrollBox = this.getScrollBox();
-    if (typeof scrollBox?.scrollTop === "number") {
-      this.savedScrollTop = scrollBox.scrollTop;
-    }
-  }
-
-  private restoreScrollTop(): void {
-    const scrollBox = this.getScrollBox();
-    if (scrollBox && typeof scrollBox.scrollTop === "number") {
-      if (scrollBox.scrollTo) {
-        scrollBox.scrollTo({ x: 0, y: this.savedScrollTop });
-      } else {
-        scrollBox.scrollTop = this.savedScrollTop;
-      }
-    }
-  }
-
   private getMediaAnchorHeightRows(item: ExpandedPost): number {
     const dimensions = getPostPrimaryImageDimensions(item);
-    if (!dimensions) {
-      return DEFAULT_MEDIA_HEIGHT_ROWS;
-    }
+    if (!dimensions) return DEFAULT_MEDIA_HEIGHT_ROWS;
 
     const cellPixelWidth = this.getCellPixelWidth();
     const cellPixelHeight = this.getCellPixelHeight();
@@ -330,34 +199,32 @@ export class PostDetailView implements TuitterView {
   private getCellPixelWidth(): number {
     const resolution = this.ctx.renderer.resolution;
     const terminalWidth = Math.max(1, this.ctx.renderer.terminalWidth || this.ctx.renderer.width);
-    if (!resolution?.width) {
-      return 8;
-    }
+    if (!resolution?.width) return 8;
     return Math.max(1, resolution.width / terminalWidth);
   }
 
   private getCellPixelHeight(): number {
     const resolution = this.ctx.renderer.resolution;
     const terminalHeight = Math.max(1, this.ctx.renderer.terminalHeight || this.ctx.renderer.height);
-    if (!resolution?.height) {
-      return 16;
-    }
+    if (!resolution?.height) return 16;
     return Math.max(1, resolution.height / terminalHeight);
   }
 
-  private async loadReplies(): Promise<void> {
-    const conversationId = this.rootPost.post.conversation_id ?? this.rootPost.post.id;
-    this.loading = true;
-    this.ctx.setStatus("Loading replies...");
-    try {
-      const replies = await getConversationReplies(this.ctx.client, conversationId);
-      this.replies = replies.filter((item) => item.post.id !== this.rootPost.post.id);
-      this.ctx.setStatus(`Loaded ${this.replies.length} replies.`);
-    } catch (error) {
-      this.ctx.setStatus(`Failed loading replies: ${(error as Error).message}`);
-    } finally {
-      this.loading = false;
+  private captureScrollTop(): void {
+    const scrollBox = this.ctx.renderer.root.findDescendantById(this.scrollId) as any;
+    if (typeof scrollBox?.scrollTop === "number") {
+      this.savedScrollTop = scrollBox.scrollTop;
     }
   }
 
+  private restoreScrollTop(): void {
+    const scrollBox = this.ctx.renderer.root.findDescendantById(this.scrollId) as any;
+    if (scrollBox && typeof scrollBox.scrollTop === "number") {
+      if (scrollBox.scrollTo) {
+        scrollBox.scrollTo({ x: 0, y: this.savedScrollTop });
+      } else {
+        scrollBox.scrollTop = this.savedScrollTop;
+      }
+    }
+  }
 }

@@ -6,8 +6,6 @@ import { theme } from "../theme.js";
 export interface PostCardState {
   id?: string;
   selected?: boolean;
-  liked?: boolean;
-  bookmarked?: boolean;
   avatarAnchorId?: string;
   useInlineAvatarOverlay?: boolean;
   mediaAnchorId?: string;
@@ -19,22 +17,14 @@ const INLINE_MEDIA_HEIGHT = 12;
 const AVATAR_WIDTH_CELLS = 4;
 const AVATAR_HEIGHT_ROWS = 2;
 
-function formatCount(value: number | undefined): string {
-  return String(value ?? 0);
-}
-
 function formatTimestamp(timestamp: string | undefined): string {
-  if (!timestamp) {
-    return "";
-  }
+  if (!timestamp) return "";
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
 }
 
 function lineClamp(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
+  if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars - 1)}…`;
 }
 
@@ -42,8 +32,6 @@ export function renderPostCard(item: ExpandedPost, state: PostCardState = {}) {
   const author = item.author;
   const post = item.post;
   const selected = state.selected ?? false;
-  const liked = state.liked ?? false;
-  const bookmarked = state.bookmarked ?? false;
 
   const header = `${author?.name ?? "Unknown"} (@${author?.username ?? "unknown"})`;
   const stamp = formatTimestamp(post.created_at);
@@ -52,11 +40,6 @@ export function renderPostCard(item: ExpandedPost, state: PostCardState = {}) {
   const mediaSummary = mediaUrl ? "[media attached]" : "";
   const showInlineAvatarOverlay = Boolean(state.useInlineAvatarOverlay && state.avatarAnchorId && avatarUrl);
   const showInlineOverlay = Boolean(selected && mediaSummary && state.useInlineMediaOverlay);
-
-  const likes = formatCount(post.public_metrics?.like_count);
-  const replies = formatCount(post.public_metrics?.reply_count);
-  const reposts = formatCount(post.public_metrics?.retweet_count);
-  const actions = `${liked ? "[liked]" : "[like]"} ${bookmarked ? "[saved]" : "[save]"}`;
 
   return Box(
     {
@@ -114,11 +97,5 @@ export function renderPostCard(item: ExpandedPost, state: PostCardState = {}) {
       : selected && mediaSummary
         ? Text({ content: "Kitty preview unavailable.", fg: theme.textMuted })
         : null,
-    Text(
-      {
-        content: `Replies ${replies}  Reposts ${reposts}  Likes ${likes}  ${actions}`,
-        fg: theme.textMuted,
-      },
-    ),
   );
 }

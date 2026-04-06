@@ -1,6 +1,6 @@
 import { Box, ScrollBox, Text, type KeyEvent } from "@opentui/core";
-import { XApiError } from "../../api/client.js";
-import { getHomeTimeline } from "../../api/timeline.js";
+import { getLocalTimeline } from "../../api/local-adapter.js";
+import { getStats } from "../../db.js";
 import type { ExpandedPost } from "../../types.js";
 import { renderPostCard } from "../components/post-card.js";
 import { getPostPrimaryImageDimensions, getPostPrimaryImageUrl } from "../media/post-image-preview.js";
@@ -15,20 +15,25 @@ export class TimelineView implements TuitterView {
   private readonly viewId = "timeline";
   private readonly scrollId = "timeline-scroll";
   private readonly ctx: ViewContext;
+  private readonly categorySlug?: string;
+  private readonly categoryName?: string;
   private items: ExpandedPost[] = [];
   private selectedIndex = 0;
-  private nextToken: string | undefined;
+  private offset = 0;
+  private hasMore = false;
   private loading = false;
   private savedScrollTop = 0;
   private shouldScrollSelectionIntoView = false;
 
-  public constructor(ctx: ViewContext) {
+  public constructor(ctx: ViewContext, categorySlug?: string, categoryName?: string) {
     this.ctx = ctx;
+    this.categorySlug = categorySlug;
+    this.categoryName = categoryName;
   }
 
   public async onEnter(): Promise<void> {
     if (this.items.length === 0) {
-      await this.loadMore();
+      this.loadMore();
     }
   }
 
@@ -38,34 +43,29 @@ export class TimelineView implements TuitterView {
 
   public render(): ViewDescriptor {
     this.captureScrollTop();
+    const stats = getStats();
+    const title = this.categoryName
+      ? `${this.categoryName}`
+      : `Bookmarks (${stats.bookmarks.toLocaleString()})`;
+
     if (this.items.length === 0 && this.loading) {
       return {
-        title: "Home Timeline",
-        hints: "j/k: navigate | r: reply | q: back",
+        title,
+        hints: "/: search | c: categories | q: back",
         content: Box(
-          {
-            width: "100%",
-            height: "100%",
-            alignItems: "center",
-            justifyContent: "center",
-          },
-          Text({ content: "Loading timeline...", fg: theme.textMuted }),
+          { width: "100%", height: "100%", alignItems: "center", justifyContent: "center" },
+          Text({ content: "Loading bookmarks...", fg: theme.textMuted }),
         ),
       };
     }
 
     if (this.items.length === 0) {
       return {
-        title: "Home Timeline",
-        hints: "q: back",
+        title,
+        hints: "/: search | c: categories | q: back",
         content: Box(
-          {
-            width: "100%",
-            height: "100%",
-            alignItems: "center",
-            justifyContent: "center",
-          },
-          Text({ content: "No posts in timeline.", fg: theme.textMuted }),
+          { width: "100%", height: "100%", alignItems: "center", justifyContent: "center" },
+          Text({ content: "No bookmarks found.", fg: theme.textMuted }),
         ),
       };
     }
@@ -76,8 +76,6 @@ export class TimelineView implements TuitterView {
       return renderPostCard(item, {
         id: this.getPostCardId(item.post.id),
         selected,
-        liked: this.ctx.isLiked(item.post.id),
-        bookmarked: this.ctx.isBookmarked(item.post.id),
         avatarAnchorId: this.getPostAvatarAnchorId(item.post.id),
         useInlineAvatarOverlay: useInlineOverlay,
         mediaAnchorId: selected ? this.getPostMediaAnchorId(item.post.id) : undefined,
@@ -87,8 +85,8 @@ export class TimelineView implements TuitterView {
     });
 
     return {
-      title: "Home Timeline",
-      hints: "j/k: navigate | l: like | b: bookmark | r: reply | Enter: open | p: profile | q: back",
+      title,
+      hints: "j/k: nav | Enter: detail | p: profile | /: search | c: categories | q: back",
       content: Box(
         {
           width: "100%",
@@ -105,12 +103,8 @@ export class TimelineView implements TuitterView {
             maxWidth: layout.contentColumnMaxWidth,
             height: "100%",
             viewportCulling: true,
-            rootOptions: {
-              backgroundColor: theme.background,
-            },
-            contentOptions: {
-              padding: 1,
-            },
+            rootOptions: { backgroundColor: theme.background },
+            contentOptions: { padding: 1 },
           },
           ...children,
         ),
@@ -159,46 +153,27 @@ export class TimelineView implements TuitterView {
 
   public async handleKey(key: KeyEvent): Promise<boolean> {
     if (isKey(key, "j", "down")) {
-      await this.moveSelection(1);
+      this.moveSelection(1);
       return true;
     }
 
     if (isKey(key, "k", "up")) {
-      await this.moveSelection(-1);
+      this.moveSelection(-1);
       return true;
     }
 
     const selected = this.items[this.selectedIndex];
-    if (!selected) {
-      return false;
-    }
-
-    if (isKey(key, "l")) {
-      const liked = await this.ctx.toggleLike(selected.post.id);
-      this.ctx.setStatus(liked ? "Post liked." : "Like removed.");
-      return true;
-    }
-
-    if (isKey(key, "b")) {
-      const bookmarked = await this.ctx.toggleBookmark(selected.post.id);
-      this.ctx.setStatus(bookmarked ? "Post bookmarked." : "Bookmark removed.");
-      return true;
-    }
+    if (!selected) return false;
 
     if (isKey(key, "return", "enter")) {
       await this.ctx.pushPostDetail(selected);
       return true;
     }
 
-    if (isKey(key, "r")) {
-      await this.ctx.pushComposer({ inReplyToPostId: selected.post.id });
-      return true;
-    }
-
     if (isKey(key, "p")) {
       const username = selected.author?.username;
       if (!username) {
-        this.ctx.setStatus("Selected post has no author profile.");
+        this.ctx.setStatus("No author info.");
         return true;
       }
       await this.ctx.pushProfile(username);
@@ -208,12 +183,12 @@ export class TimelineView implements TuitterView {
     return false;
   }
 
-  private async moveSelection(delta: number): Promise<void> {
+  private moveSelection(delta: number): void {
     const nextIndex = Math.max(0, Math.min(this.items.length - 1, this.selectedIndex + delta));
     this.selectedIndex = nextIndex;
     this.shouldScrollSelectionIntoView = true;
-    if (this.nextToken && this.selectedIndex >= this.items.length - 3) {
-      await this.loadMore();
+    if (this.hasMore && this.selectedIndex >= this.items.length - 3) {
+      this.loadMore();
     }
   }
 
@@ -231,9 +206,7 @@ export class TimelineView implements TuitterView {
 
   private getMediaAnchorHeightRows(item: ExpandedPost): number {
     const dimensions = getPostPrimaryImageDimensions(item);
-    if (!dimensions) {
-      return DEFAULT_MEDIA_HEIGHT_ROWS;
-    }
+    if (!dimensions) return DEFAULT_MEDIA_HEIGHT_ROWS;
 
     const cellPixelWidth = this.getCellPixelWidth();
     const cellPixelHeight = this.getCellPixelHeight();
@@ -248,29 +221,21 @@ export class TimelineView implements TuitterView {
   private getCellPixelWidth(): number {
     const resolution = this.ctx.renderer.resolution;
     const terminalWidth = Math.max(1, this.ctx.renderer.terminalWidth || this.ctx.renderer.width);
-    if (!resolution?.width) {
-      return 8;
-    }
+    if (!resolution?.width) return 8;
     return Math.max(1, resolution.width / terminalWidth);
   }
 
   private getCellPixelHeight(): number {
     const resolution = this.ctx.renderer.resolution;
     const terminalHeight = Math.max(1, this.ctx.renderer.terminalHeight || this.ctx.renderer.height);
-    if (!resolution?.height) {
-      return 16;
-    }
+    if (!resolution?.height) return 16;
     return Math.max(1, resolution.height / terminalHeight);
   }
 
   private async scrollSelectedIntoView(): Promise<void> {
     const selected = this.items[this.selectedIndex];
-    if (!selected) {
-      return;
-    }
-
-    const selectedCardId = this.getPostCardId(selected.post.id);
-    await this.scrollSelectedIntoViewWithRetry(selectedCardId, 0);
+    if (!selected) return;
+    await this.scrollSelectedIntoViewWithRetry(this.getPostCardId(selected.post.id), 0);
   }
 
   private async scrollSelectedIntoViewWithRetry(selectedCardId: string, attempt: number): Promise<void> {
@@ -296,7 +261,6 @@ export class TimelineView implements TuitterView {
       return;
     }
 
-    // Let layout settle so image anchors are measured at final scroll position.
     await this.ctx.renderer.idle();
   }
 
@@ -305,13 +269,7 @@ export class TimelineView implements TuitterView {
     scrollTop?: number;
     scrollTo?: (position: number | { x: number; y: number }) => void;
   } | undefined {
-    return this.ctx.renderer.root.findDescendantById(this.scrollId) as
-      | {
-          scrollChildIntoView?: (childId: string) => void;
-          scrollTop?: number;
-          scrollTo?: (position: number | { x: number; y: number }) => void;
-        }
-      | undefined;
+    return this.ctx.renderer.root.findDescendantById(this.scrollId) as any;
   }
 
   private captureScrollTop(): void {
@@ -336,56 +294,22 @@ export class TimelineView implements TuitterView {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  private async loadMore(): Promise<void> {
-    if (this.loading) {
-      return;
-    }
-
+  private loadMore(): void {
+    if (this.loading) return;
     this.loading = true;
-    this.ctx.setStatus("Loading timeline...");
-    try {
-      const page = await getHomeTimeline(this.ctx.client, this.ctx.me.id, {
-        paginationToken: this.nextToken,
-        maxResults: 20,
-      });
-      this.items = [...this.items, ...page.items];
-      this.nextToken = page.nextToken;
-      this.ctx.setStatus(`Loaded ${page.items.length} posts.`);
-    } catch (error) {
-      this.ctx.setStatus(`Timeline request failed: ${this.formatError(error)}`);
-    } finally {
-      this.loading = false;
-    }
-  }
+    this.ctx.setStatus("Loading bookmarks...");
 
-  private formatError(error: unknown): string {
-    if (error instanceof XApiError) {
-      const detail = this.extractErrorDetail(error.details);
-      return detail ? `${error.message} - ${detail}` : error.message;
+    const page = getLocalTimeline({
+      offset: this.offset,
+      maxResults: 20,
+      categorySlug: this.categorySlug,
+    });
+    this.items = [...this.items, ...page.items];
+    this.hasMore = !!page.nextToken;
+    if (page.nextToken) {
+      this.offset = Number.parseInt(page.nextToken, 10);
     }
-    return (error as Error).message;
-  }
-
-  private extractErrorDetail(details: unknown): string | undefined {
-    if (!details || typeof details !== "object") {
-      return undefined;
-    }
-    const maybeRecord = details as Record<string, unknown>;
-    if (typeof maybeRecord.detail === "string") {
-      return maybeRecord.detail;
-    }
-    if (typeof maybeRecord.title === "string") {
-      return maybeRecord.title;
-    }
-    if (Array.isArray(maybeRecord.errors) && maybeRecord.errors.length > 0) {
-      const first = maybeRecord.errors[0];
-      if (first && typeof first === "object") {
-        const errorRecord = first as Record<string, unknown>;
-        if (typeof errorRecord.message === "string") {
-          return errorRecord.message;
-        }
-      }
-    }
-    return undefined;
+    this.ctx.setStatus(`Loaded ${this.items.length} bookmarks.`);
+    this.loading = false;
   }
 }

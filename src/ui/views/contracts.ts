@@ -1,27 +1,17 @@
 import type { CliRenderer, KeyEvent } from "@opentui/core";
-import type { XApiClient } from "../../api/client.js";
-import type { ExpandedPost, XUser } from "../../types.js";
+import type { ExpandedPost } from "../../types.js";
 import type { InlineImageManager } from "../media/inline-image-manager.js";
-
-export interface ComposerRequest {
-  inReplyToPostId: string;
-  defaultText?: string;
-}
 
 export interface ViewContext {
   renderer: CliRenderer;
   inlineImageManager: InlineImageManager;
-  client: XApiClient;
-  me: XUser;
   setStatus: (message: string) => void;
   pushPostDetail: (post: ExpandedPost) => Promise<void>;
   pushProfile: (username: string) => Promise<void>;
-  pushComposer: (request: ComposerRequest) => Promise<void>;
+  pushSearch: () => Promise<void>;
+  pushCategories: () => Promise<void>;
+  pushCategoryTimeline: (slug: string, name: string) => Promise<void>;
   popView: () => void;
-  toggleLike: (postId: string) => Promise<boolean>;
-  toggleBookmark: (postId: string) => Promise<boolean>;
-  isLiked: (postId: string) => boolean;
-  isBookmarked: (postId: string) => boolean;
 }
 
 export interface ViewDescriptor {

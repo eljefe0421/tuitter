@@ -1,42 +1,46 @@
 # tuitter
 
-`tuitter` is a terminal UI client for X (Twitter) built with TypeScript and OpenTUI.  
-It lets you authenticate with your own X account and browse or interact with content directly from the terminal.
+Terminal UI for browsing your X/Twitter bookmarks locally. Powered by [Xtract](https://github.com/eljefe0421/xtract)'s SQLite database — no API credits, no authentication, fully offline.
 
 ![tuitter](tuitter.png)
 
-## Download, install, and run
+## Features
+
+- Browse **14,500+ bookmarks** in the terminal
+- **FTS5 full-text search** across bookmark text, tags, and entities
+- **13 AI-generated categories** with browse-by-category
+- **Kitty graphics protocol** for inline images (Ghostty, WezTerm, Kitty, Warp)
+- **Author profiles** — see all bookmarks from a specific author
+- Keyboard-driven: `j/k` navigate, `/` search, `c` categories, `Enter` detail, `p` profile
+
+## Setup
 
 ### Prerequisites
 
 - [Bun](https://bun.sh/) installed
-- An X developer app with OAuth 2.0 credentials (see the section below)
+- [Xtract](https://github.com/eljefe0421/xtract) with a populated SQLite database at `prisma/dev.db`
 
-### 1) Clone and install dependencies
+### Install & run
 
 ```bash
-git clone https://github.com/<your-org-or-username>/tuitter.git
+git clone https://github.com/eljefe0421/tuitter.git
 cd tuitter
 bun install
+bun src/index.ts
 ```
 
-### 2) Create your local env file
+The app looks for the Xtract database at `../xtract/prisma/dev.db` by default. Override with:
+
+```bash
+TUITTER_DB_PATH=/path/to/dev.db bun src/index.ts
+```
+
+Or set it in `.env`:
 
 ```bash
 cp .env.example .env
+# edit TUITTER_DB_PATH
 ```
-
-Then set at least:
-
-- `X_CLIENT_ID` (required)
-
-Optional:
-
-- `X_CLIENT_SECRET`
-- `X_REDIRECT_URI` (defaults to `http://127.0.0.1:8787/callback`)
-- `X_OAUTH_SCOPES`
-- `X_TOKEN_STORE_PATH`
-- `X_IMAGE_MODE` (`auto`, `kitty`, or `off`)
 
 ### Optional screen-time limit
 
@@ -46,40 +50,43 @@ Create a `tuitter.conf` file in the directory where you launch `tuitter`:
 MAX_SECONDS=3600
 ```
 
-- `MAX_SECONDS` sets your maximum allowed usage per day.
-- Daily usage is tracked in a local `.tuitter` state file in that same directory.
-- When the limit is exceeded, tuitter shows a large red warning banner in the UI.
+When the limit is exceeded, tuitter shows a large red warning banner in the UI.
 
-Quick use:
+## Keyboard shortcuts
 
-1. Add `MAX_SECONDS=<seconds>` to `tuitter.conf` (example: `MAX_SECONDS=1800` for 30 minutes/day).
-2. Start `tuitter` from that same directory.
-3. When you hit the limit, tuitter blocks usage until the next day.
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Navigate up/down |
+| `Enter` | Open bookmark detail |
+| `p` | View author profile |
+| `/` | Search bookmarks |
+| `c` | Browse categories |
+| `Tab` | Toggle search input / results |
+| `q` / `Esc` | Back / quit |
 
-### 3) Link and start the app
+## Architecture
 
-```bash
-bun link
-tuitter
+```
+src/
+  index.ts              Entry point
+  config.ts             Configuration (env vars, tuitter.conf)
+  db.ts                 SQLite queries via bun:sqlite (read-only)
+  types.ts              Shared TypeScript interfaces
+  api/
+    local-adapter.ts    Maps DB rows → ExpandedPost for views
+  ui/
+    app.ts              Main app (view stack, key handling)
+    theme.ts            Color scheme
+    views/
+      timeline.ts       Bookmark feed (paginated, category-filtered)
+      post-detail.ts    Full bookmark with enrichment metadata
+      profile.ts        Author's bookmarks
+      search.ts         FTS5 search with results
+      category.ts       Category picker
+    components/         Reusable UI components
+    media/              Kitty graphics protocol for inline images
 ```
 
-On first launch, the app opens your browser for OAuth authorization and then stores your token locally (default: `~/.tuitter/oauth-token.json`).
+## Forked from
 
-## Create your own `.env` variables from console.x.com
-
-Use these steps so anyone can run this project with their own X developer app:
-
-1. Go to [console.x.com](https://console.x.com/) and sign in.
-2. Create a new Project/App (or open an existing app).
-3. In the app settings, enable OAuth 2.0.
-4. Set the callback/redirect URL to:
-   - `http://127.0.0.1:8787/callback`
-5. Copy the **Client ID** into:
-   - `X_CLIENT_ID=...`
-6. If your app is configured as a confidential client, also copy the **Client Secret** into:
-   - `X_CLIENT_SECRET=...`
-7. (Optional) Configure scopes. The app defaults to:
-   - `tweet.read users.read tweet.write like.write like.read bookmark.write bookmark.read offline.access`
-8. Save your `.env` and run `tuitter` again.
-
-If OAuth fails, verify that the callback URL in `console.x.com` exactly matches `X_REDIRECT_URI` in your `.env`.
+Originally [bddicken/tuitter](https://github.com/bddicken/tuitter) — a Twitter API client. This fork replaces the API layer with local SQLite, making it a zero-cost offline bookmark browser.

@@ -74,7 +74,7 @@ export function renderUserInfo(user: XUser, state: UserInfoState = {}) {
       fg: theme.textMuted,
     }),
     Text({
-      content: `Followers ${followers}  Following ${following}  Posts ${tweets}`,
+      content: `Bookmarks: ${tweets}`,
       fg: theme.accent,
     }),
   );

@@ -1,6 +1,5 @@
 import { Box, ScrollBox, Text, type KeyEvent } from "@opentui/core";
-import { getUserTimeline } from "../../api/timeline.js";
-import { getUserByUsername } from "../../api/users.js";
+import { getLocalUser, getLocalUserTimeline } from "../../api/local-adapter.js";
 import type { ExpandedPost, XUser } from "../../types.js";
 import { renderPostCard } from "../components/post-card.js";
 import { renderUserInfo } from "../components/user-info.js";
@@ -16,9 +15,8 @@ export class ProfileView implements TuitterView {
   private user?: XUser;
   private posts: ExpandedPost[] = [];
   private selectedIndex = 0;
-  private loading = false;
-  private loadingPosts = false;
-  private nextToken: string | undefined;
+  private offset = 0;
+  private hasMore = false;
   private savedScrollTop = 0;
   private shouldScrollSelectionIntoView = false;
 
@@ -27,9 +25,9 @@ export class ProfileView implements TuitterView {
     this.username = username;
   }
 
-  public async onEnter(): Promise<void> {
+  public onEnter(): void {
     if (!this.user) {
-      await this.loadProfile();
+      this.loadProfile();
     }
   }
 
@@ -41,16 +39,11 @@ export class ProfileView implements TuitterView {
     this.captureScrollTop();
     if (!this.user) {
       return {
-        title: `Profile @${this.username}`,
+        title: `@${this.username}`,
         hints: "q: back",
         content: Box(
-          {
-            width: "100%",
-            height: "100%",
-            justifyContent: "center",
-            alignItems: "center",
-          },
-          Text({ content: this.loading ? "Loading profile..." : "Profile unavailable.", fg: theme.textMuted }),
+          { width: "100%", height: "100%", justifyContent: "center", alignItems: "center" },
+          Text({ content: "No bookmarks from this author.", fg: theme.textMuted }),
         ),
       };
     }
@@ -60,8 +53,6 @@ export class ProfileView implements TuitterView {
           renderPostCard(item, {
             id: this.getPostCardId(item.post.id),
             selected: index === this.selectedIndex,
-            liked: this.ctx.isLiked(item.post.id),
-            bookmarked: this.ctx.isBookmarked(item.post.id),
             avatarAnchorId: this.getPostAvatarAnchorId(item.post.id),
             useInlineAvatarOverlay: !this.ctx.inlineImageManager.isDisabled(),
           }),
@@ -75,13 +66,13 @@ export class ProfileView implements TuitterView {
               borderColor: theme.border,
               backgroundColor: theme.surface,
             },
-            Text({ content: this.loadingPosts ? "Loading posts..." : "No posts found.", fg: theme.textMuted }),
+            Text({ content: "No bookmarks found.", fg: theme.textMuted }),
           ),
         ];
 
     return {
-      title: `Profile @${this.user.username}`,
-      hints: "j/k: navigate | l: like | b: bookmark | r: reply | Enter: open post | q: back",
+      title: `@${this.user.username} (${this.user.public_metrics?.tweet_count ?? 0} bookmarks)`,
+      hints: "j/k: nav | Enter: detail | q: back",
       content: Box(
         {
           width: "100%",
@@ -111,9 +102,7 @@ export class ProfileView implements TuitterView {
               width: "100%",
               height: "100%",
               viewportCulling: true,
-              contentOptions: {
-                padding: 1,
-              },
+              contentOptions: { padding: 1 },
             },
             ...children,
           ),
@@ -122,41 +111,22 @@ export class ProfileView implements TuitterView {
     };
   }
 
-  public async handleKey(key: KeyEvent): Promise<boolean> {
+  public handleKey(key: KeyEvent): boolean {
     if (isKey(key, "j", "down")) {
-      await this.moveSelection(1);
+      this.moveSelection(1);
       return true;
     }
 
     if (isKey(key, "k", "up")) {
-      await this.moveSelection(-1);
+      this.moveSelection(-1);
       return true;
     }
 
     const selected = this.posts[this.selectedIndex];
-    if (!selected) {
-      return false;
-    }
-
-    if (isKey(key, "l")) {
-      const liked = await this.ctx.toggleLike(selected.post.id);
-      this.ctx.setStatus(liked ? "Post liked." : "Like removed.");
-      return true;
-    }
-
-    if (isKey(key, "b")) {
-      const bookmarked = await this.ctx.toggleBookmark(selected.post.id);
-      this.ctx.setStatus(bookmarked ? "Post bookmarked." : "Bookmark removed.");
-      return true;
-    }
-
-    if (isKey(key, "r")) {
-      await this.ctx.pushComposer({ inReplyToPostId: selected.post.id });
-      return true;
-    }
+    if (!selected) return false;
 
     if (isKey(key, "return", "enter")) {
-      await this.ctx.pushPostDetail(selected);
+      void this.ctx.pushPostDetail(selected);
       return true;
     }
 
@@ -203,7 +173,7 @@ export class ProfileView implements TuitterView {
     return `profile-header-avatar-${userId}`;
   }
 
-  private async moveSelection(delta: number): Promise<void> {
+  private moveSelection(delta: number): void {
     if (this.posts.length === 0) {
       this.selectedIndex = 0;
       return;
@@ -212,8 +182,8 @@ export class ProfileView implements TuitterView {
     const next = Math.max(0, Math.min(this.posts.length - 1, this.selectedIndex + delta));
     this.selectedIndex = next;
     this.shouldScrollSelectionIntoView = true;
-    if (this.nextToken && this.selectedIndex >= this.posts.length - 3) {
-      await this.loadMorePosts();
+    if (this.hasMore && this.selectedIndex >= this.posts.length - 3) {
+      this.loadMorePosts();
     }
   }
 
@@ -227,29 +197,22 @@ export class ProfileView implements TuitterView {
 
   private scrollSelectedIntoView(): void {
     const selected = this.posts[this.selectedIndex];
-    if (!selected) {
-      return;
-    }
+    if (!selected) return;
     this.scrollSelectedIntoViewWithRetry(this.getPostCardId(selected.post.id), 0);
   }
 
   private scrollSelectedIntoViewWithRetry(selectedCardId: string, attempt: number): void {
     setTimeout(() => {
       const scrollBox = this.getScrollBox();
-
       if (!scrollBox?.scrollChildIntoView) {
-        if (attempt < 4) {
-          this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
-        }
+        if (attempt < 4) this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
         return;
       }
 
       const before = scrollBox.scrollTop;
       scrollBox.scrollChildIntoView(selectedCardId);
       const after = scrollBox.scrollTop;
-      if (typeof after === "number") {
-        this.savedScrollTop = after;
-      }
+      if (typeof after === "number") this.savedScrollTop = after;
 
       if (before === after && attempt < 4) {
         this.scrollSelectedIntoViewWithRetry(selectedCardId, attempt + 1);
@@ -257,18 +220,8 @@ export class ProfileView implements TuitterView {
     }, attempt === 0 ? 0 : 16);
   }
 
-  private getScrollBox(): {
-    scrollChildIntoView?: (childId: string) => void;
-    scrollTop?: number;
-    scrollTo?: (position: number | { x: number; y: number }) => void;
-  } | undefined {
-    return this.ctx.renderer.root.findDescendantById(this.scrollId) as
-      | {
-          scrollChildIntoView?: (childId: string) => void;
-          scrollTop?: number;
-          scrollTo?: (position: number | { x: number; y: number }) => void;
-        }
-      | undefined;
+  private getScrollBox(): any {
+    return this.ctx.renderer.root.findDescendantById(this.scrollId);
   }
 
   private captureScrollTop(): void {
@@ -289,37 +242,23 @@ export class ProfileView implements TuitterView {
     }
   }
 
-  private async loadProfile(): Promise<void> {
-    this.loading = true;
-    this.ctx.setStatus(`Loading profile @${this.username}...`);
-    try {
-      this.user = await getUserByUsername(this.ctx.client, this.username);
-      await this.loadMorePosts();
-      this.ctx.setStatus(`Loaded profile @${this.username}.`);
-    } catch (error) {
-      this.ctx.setStatus(`Profile request failed: ${(error as Error).message}`);
-    } finally {
-      this.loading = false;
+  private loadProfile(): void {
+    this.user = getLocalUser(this.username) ?? undefined;
+    if (this.user) {
+      this.loadMorePosts();
     }
   }
 
-  private async loadMorePosts(): Promise<void> {
-    if (!this.user || this.loadingPosts) {
-      return;
+  private loadMorePosts(): void {
+    const page = getLocalUserTimeline(this.username, {
+      offset: this.offset,
+      maxResults: 20,
+    });
+    this.posts = [...this.posts, ...page.items];
+    this.hasMore = !!page.nextToken;
+    if (page.nextToken) {
+      this.offset = Number.parseInt(page.nextToken, 10);
     }
-    this.loadingPosts = true;
-    try {
-      const page = await getUserTimeline(this.ctx.client, this.user.id, {
-        paginationToken: this.nextToken,
-        maxResults: 20,
-        excludeReplies: true,
-      });
-      this.posts = [...this.posts, ...page.items];
-      this.nextToken = page.nextToken;
-    } catch (error) {
-      this.ctx.setStatus(`Could not load user posts: ${(error as Error).message}`);
-    } finally {
-      this.loadingPosts = false;
-    }
+    this.ctx.setStatus(`@${this.username}: ${this.posts.length} bookmarks.`);
   }
 }
