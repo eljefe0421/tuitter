@@ -10,7 +10,6 @@ let _db: Database | null = null;
 function db(): Database {
   if (!_db) {
     _db = new Database(XTRACT_DB_PATH, { readonly: true });
-    _db.exec("PRAGMA journal_mode = WAL");
   }
   return _db;
 }

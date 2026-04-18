@@ -18,6 +18,10 @@ export class SearchView implements TuitterView {
   private lastQuery = "";
   private savedScrollTop = 0;
   private shouldScrollSelectionIntoView = false;
+  // The Enter key that runs a search also bubbles to handleKey. If we enter
+  // results mode in the same tick, handleKey would open detail for the first
+  // result. This flag swallows that one Enter.
+  private swallowNextEnter = false;
 
   public constructor(ctx: ViewContext) {
     this.ctx = ctx;
@@ -39,6 +43,10 @@ export class SearchView implements TuitterView {
 
   public onEnter(): void {
     this.input.focus();
+  }
+
+  public isInputFocused(): boolean {
+    return !this.inResultsMode;
   }
 
   public onExit(): void {
@@ -119,6 +127,7 @@ export class SearchView implements TuitterView {
             width: "100%",
             maxWidth: layout.contentColumnMaxWidth,
             paddingTop: 1,
+            flexShrink: 0,
           },
           inputSection,
         ),
@@ -128,7 +137,10 @@ export class SearchView implements TuitterView {
             width: "100%",
             maxWidth: layout.contentColumnMaxWidth,
             flexGrow: 1,
+            flexShrink: 1,
+            minHeight: 0,
             viewportCulling: true,
+            rootOptions: { backgroundColor: theme.background },
             contentOptions: { padding: 1 },
           },
           ...resultCards,
@@ -190,6 +202,10 @@ export class SearchView implements TuitterView {
       if (!selected) return false;
 
       if (isKey(key, "return", "enter")) {
+        if (this.swallowNextEnter) {
+          this.swallowNextEnter = false;
+          return true;
+        }
         await this.ctx.pushPostDetail(selected);
         return true;
       }
@@ -224,6 +240,14 @@ export class SearchView implements TuitterView {
     this.results = page.items;
     this.selectedIndex = 0;
     this.inResultsMode = this.results.length > 0;
+    // Blur the input when entering results mode so j/k reach the view's handleKey
+    // instead of being inserted as text into the search field.
+    if (this.inResultsMode) {
+      this.input.blur();
+      // The same Enter keypress that fired this search also reaches handleKey.
+      // Without this flag, it would immediately open the detail view for result #0.
+      this.swallowNextEnter = true;
+    }
     this.ctx.setStatus(`${this.results.length} results for "${query}".`);
   }
 

@@ -27,6 +27,9 @@ export interface TuitterView {
   onDidRender?: () => Promise<void> | void;
   render: () => ViewDescriptor;
   handleKey: (key: KeyEvent) => Promise<boolean> | boolean;
+  // When true, the app skips global single-letter shortcuts (/, c, q) so the
+  // view can receive raw typed characters (e.g. search input field).
+  isInputFocused?: () => boolean;
 }
 
 export function isKey(key: KeyEvent, ...names: string[]): boolean {

@@ -232,14 +232,20 @@ export class TuitterApp {
         return;
       }
 
-      const globalHandled = await this.handleGlobalKey(key);
-      if (globalHandled) {
-        this.render();
-        return;
-      }
-
       const view = this.currentView();
       if (!view) return;
+
+      // When the active view has a focused input (e.g. search), skip global
+      // single-letter shortcuts so typed characters reach the input instead of
+      // triggering actions like "/", "c", or "q".
+      const inputFocused = view.isInputFocused?.() ?? false;
+      if (!inputFocused) {
+        const globalHandled = await this.handleGlobalKey(key);
+        if (globalHandled) {
+          this.render();
+          return;
+        }
+      }
 
       const handled = await view.handleKey(key);
       if (handled) {

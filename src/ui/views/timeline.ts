@@ -26,6 +26,7 @@ export class TimelineView implements TuitterView {
   private sortOrder: "newest" | "oldest" = "newest";
   private savedScrollTop = 0;
   private shouldScrollSelectionIntoView = false;
+  private totalCount = 0;
 
   public constructor(ctx: ViewContext, categorySlug?: string, categoryName?: string) {
     this.ctx = ctx;
@@ -46,6 +47,9 @@ export class TimelineView implements TuitterView {
   public render(): ViewDescriptor {
     this.captureScrollTop();
     const stats = getStats();
+    if (this.totalCount === 0) {
+      this.totalCount = stats.bookmarks;
+    }
     const title = this.categoryName
       ? `${this.categoryName}`
       : `Bookmarks (${stats.bookmarks.toLocaleString()})`;
@@ -88,6 +92,12 @@ export class TimelineView implements TuitterView {
       });
     });
 
+    const loadedCount = this.items.length;
+    const total = this.totalCount;
+    const progressText = this.hasMore
+      ? `Showing ${loadedCount.toLocaleString()} of ${total.toLocaleString()} — scroll down for more`
+      : `Showing all ${loadedCount.toLocaleString()} bookmarks`;
+
     return {
       title,
       hints: `j/k: nav | Enter: detail | p: profile | /: search | c: categories | s: stumble | t: sort (${this.sortOrder}) | o: open | y: copy | q: back`,
@@ -99,18 +109,34 @@ export class TimelineView implements TuitterView {
           backgroundColor: theme.background,
           paddingLeft: 1,
           paddingRight: 1,
+          flexDirection: "column",
         },
         ScrollBox(
           {
             id: this.scrollId,
             width: "100%",
             maxWidth: layout.contentColumnMaxWidth,
-            height: "100%",
+            flexGrow: 1,
+            flexShrink: 1,
+            minHeight: 0,
             viewportCulling: true,
             rootOptions: { backgroundColor: theme.background },
             contentOptions: { padding: 1 },
           },
           ...children,
+        ),
+        Box(
+          {
+            width: "100%",
+            maxWidth: layout.contentColumnMaxWidth,
+            paddingLeft: 1,
+            paddingRight: 1,
+            paddingTop: 0,
+            paddingBottom: 0,
+            alignItems: "center",
+            flexShrink: 0,
+          },
+          Text({ content: progressText, fg: theme.textMuted }),
         ),
       ),
     };
